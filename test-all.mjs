@@ -1475,6 +1475,43 @@ try {
   } else {
     fail(`indeed.normalize wrong: ${JSON.stringify(inJobs)}`);
   }
+
+  const { deriveCriteria } = await import(pathToFileURL(join(ROOT, 'search.mjs')).href);
+
+  const c = deriveCriteria({
+    target_roles: { primary: ['Senior AI Engineer'], archetypes: [{ name: 'Solutions Architect' }] },
+    location: { city: 'Madrid', country: 'Spain' },
+    compensation: { location_flexibility: 'Remote preferred' },
+  }, {});
+  if (c.keywords.includes('Senior AI Engineer') && c.keywords.includes('Solutions Architect') &&
+      c.location === 'Madrid' && c.country === 'es' && c.remote === 'remote' && c.postedDays === 7) {
+    pass('deriveCriteria maps roles, archetypes, location, country code, remote, default freshness');
+  } else {
+    fail(`deriveCriteria wrong: ${JSON.stringify(c)}`);
+  }
+
+  const cOverride = deriveCriteria({}, { keywords: 'ML Engineer, Data Scientist', postedDays: 1 });
+  if (cOverride.keywords.length === 2 && cOverride.keywords[0] === 'ML Engineer' &&
+      cOverride.country === 'us' && cOverride.postedDays === 1) {
+    pass('deriveCriteria honors --keywords/--posted-days overrides and defaults country to us');
+  } else {
+    fail(`deriveCriteria overrides wrong: ${JSON.stringify(cOverride)}`);
+  }
+
+  const cIso = deriveCriteria({ target_roles: { primary: ['Eng'] }, location: { country: 'de' } }, {});
+  if (cIso.country === 'de') {
+    pass('deriveCriteria passes through an already-ISO2 country code');
+  } else {
+    fail(`deriveCriteria ISO2 passthrough wrong: ${cIso.country}`);
+  }
+
+  let refused = false;
+  try { deriveCriteria({}, {}); } catch { refused = true; }
+  if (refused) {
+    pass('deriveCriteria refuses empty criteria (no roles, no --keywords)');
+  } else {
+    fail('deriveCriteria did not refuse empty criteria');
+  }
 } catch (e) {
   fail(`Apify transport tests crashed: ${e.message}`);
 }
