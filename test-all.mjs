@@ -1374,6 +1374,57 @@ try {
   } else {
     fail(`runActorSync network mapping wrong: ${netMsg}`);
   }
+
+  const linkedin = (await import(pathToFileURL(join(ROOT, 'sources/linkedin-apify.mjs')).href)).default;
+
+  const liInput = linkedin.buildInput(
+    { keywords: ['AI Engineer', 'LLM'], location: 'Madrid', country: 'es', remote: undefined, postedDays: 7 },
+    { maxItems: 100 },
+  );
+  const liUrl = liInput.urls?.[0] || '';
+  if (liUrl.includes('linkedin.com/jobs/search') &&
+      liUrl.includes('f_TPR=r604800') &&
+      /keywords=AI(\+|%20)Engineer/.test(liUrl) &&
+      liInput.scrapeCompany === false &&
+      liInput.count === 100) {
+    pass('linkedin.buildInput builds a 7-day search URL, scrapeCompany off, count honored');
+  } else {
+    fail(`linkedin.buildInput wrong: ${JSON.stringify(liInput)}`);
+  }
+
+  const liMin = linkedin.buildInput(
+    { keywords: ['AI'], location: '', country: 'us', remote: undefined, postedDays: 7 },
+    { maxItems: 3 },
+  );
+  if (liMin.count === 10) {
+    pass('linkedin.buildInput clamps count up to the actor minimum (10)');
+  } else {
+    fail(`linkedin.buildInput did not clamp count: ${liMin.count}`);
+  }
+
+  const liJobs = linkedin.normalize([
+    { title: 'Senior AI Engineer', jobUrl: 'https://linkedin.com/jobs/view/1', companyName: 'Acme', location: 'Madrid' },
+    { title: '', jobUrl: 'https://linkedin.com/jobs/view/2', companyName: 'NoTitle' },
+    { title: 'ML Eng', companyName: 'NoUrl' },
+  ]);
+  if (liJobs.length === 1 && liJobs[0].url === 'https://linkedin.com/jobs/view/1' &&
+      liJobs[0].company === 'Acme' && liJobs[0].location === 'Madrid') {
+    pass('linkedin.normalize maps fields and drops malformed items');
+  } else {
+    fail(`linkedin.normalize wrong: ${JSON.stringify(liJobs)}`);
+  }
+
+  const liNullSafe = linkedin.normalize([
+    null,
+    undefined,
+    'not-an-object',
+    { title: 'Real Role', jobUrl: 'https://linkedin.com/jobs/view/9', companyName: 'Acme', location: 'Remote' },
+  ]);
+  if (liNullSafe.length === 1 && liNullSafe[0].url === 'https://linkedin.com/jobs/view/9') {
+    pass('linkedin.normalize survives null/undefined/non-object items');
+  } else {
+    fail(`linkedin.normalize null-safety wrong: ${JSON.stringify(liNullSafe)}`);
+  }
 } catch (e) {
   fail(`Apify transport tests crashed: ${e.message}`);
 }
