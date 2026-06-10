@@ -508,7 +508,7 @@ if (fileExists('VERSION')) {
 console.log('\n11. Location filter — always_allow tier');
 
 try {
-  const { buildLocationFilter } = await import(pathToFileURL(join(ROOT, 'scan.mjs')).href);
+  const { buildLocationFilter } = await import(pathToFileURL(join(ROOT, 'pipeline-io.mjs')).href);
 
   const filter = buildLocationFilter({
     always_allow: ['belgium', 'brussels'],

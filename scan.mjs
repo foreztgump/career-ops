@@ -30,21 +30,28 @@
  *   node scan.mjs --verify --throttle=8000     # custom base gap in ms (waits base..2*base)
  */
 
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync } from 'fs';
+import { readFileSync, existsSync, mkdirSync, readdirSync } from 'fs';
 import { pathToFileURL, fileURLToPath } from 'url';
 import path from 'path';
 import yaml from 'js-yaml';
 
 import { makeHttpCtx } from './providers/_http.mjs';
+import {
+  SCAN_HISTORY_PATH,
+  PIPELINE_PATH,
+  buildTitleFilter,
+  buildLocationFilter,
+  loadSeenUrls,
+  loadSeenCompanyRoles,
+  appendToPipeline,
+  appendToScanHistory,
+} from './pipeline-io.mjs';
 
 const parseYaml = yaml.load;
 
 // ── Config ──────────────────────────────────────────────────────────
 
 const PORTALS_PATH = process.env.CAREER_OPS_PORTALS || 'portals.yml';
-const SCAN_HISTORY_PATH = 'data/scan-history.tsv';
-const PIPELINE_PATH = 'data/pipeline.md';
-const APPLICATIONS_PATH = 'data/applications.md';
 const PROVIDERS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'providers');
 
 // Ensure required directories exist (fresh setup)
@@ -117,162 +124,6 @@ function resolveProvider(entry, providers, { skipIds = [] } = {}) {
     if (hit) return { provider: p };
   }
   return null;
-}
-
-// ── Title filter ────────────────────────────────────────────────────
-
-function buildTitleFilter(titleFilter) {
-  const positive = (titleFilter?.positive || []).map(k => k.toLowerCase());
-  const negative = (titleFilter?.negative || []).map(k => k.toLowerCase());
-
-  return (title) => {
-    const lower = title.toLowerCase();
-    const hasPositive = positive.length === 0 || positive.some(k => lower.includes(k));
-    const hasNegative = negative.some(k => lower.includes(k));
-    return hasPositive && !hasNegative;
-  };
-}
-
-// ── Location filter ─────────────────────────────────────────────────
-// Optional. If `location_filter` is absent from portals.yml, all locations pass.
-// Semantics (case-insensitive substring, in this order):
-//   - Empty / whitespace-only / non-string location → pass (don't penalize
-//     missing or malformed provider data)
-//   - `always_allow` matches → pass (takes precedence over `block` — lets a
-//     multi-location string like "Remote, Belgium or France" through because
-//     the home region is an option, even though "france" is blocked)
-//   - `block` matches → reject
-//   - `allow` empty → pass (already cleared block)
-//   - `allow` non-empty → must match at least one keyword
-
-// Normalize a keyword list from portals.yml: tolerates a bare string
-// (wrapped to a 1-item array), null/undefined (→ []), and non-string
-// entries (filtered out). Survivors are lowercased, trimmed, and any
-// resulting empty strings are dropped — an empty keyword would otherwise
-// match every location via String.includes(''), silently bypassing the
-// other tiers.
-function normalizeKeywordList(value) {
-  if (value == null) return [];
-  const arr = Array.isArray(value) ? value : [value];
-  return arr
-    .filter(k => typeof k === 'string')
-    .map(k => k.toLowerCase().trim())
-    .filter(Boolean);
-}
-
-export function buildLocationFilter(locationFilter) {
-  if (!locationFilter) return () => true;
-  const alwaysAllow = normalizeKeywordList(locationFilter.always_allow);
-  const allow = normalizeKeywordList(locationFilter.allow);
-  const block = normalizeKeywordList(locationFilter.block);
-
-  return (location) => {
-    if (typeof location !== 'string' || location.trim() === '') return true;
-    const lower = location.toLowerCase();
-    if (alwaysAllow.length > 0 && alwaysAllow.some(k => lower.includes(k))) return true;
-    if (block.length > 0 && block.some(k => lower.includes(k))) return false;
-    if (allow.length === 0) return true;
-    return allow.some(k => lower.includes(k));
-  };
-}
-
-// ── Dedup ───────────────────────────────────────────────────────────
-
-function loadSeenUrls() {
-  const seen = new Set();
-
-  // scan-history.tsv
-  if (existsSync(SCAN_HISTORY_PATH)) {
-    const lines = readFileSync(SCAN_HISTORY_PATH, 'utf-8').split('\n');
-    for (const line of lines.slice(1)) { // skip header
-      const url = line.split('\t')[0];
-      if (url) seen.add(url);
-    }
-  }
-
-  // pipeline.md — extract URLs from checkbox lines
-  if (existsSync(PIPELINE_PATH)) {
-    const text = readFileSync(PIPELINE_PATH, 'utf-8');
-    for (const match of text.matchAll(/- \[[ x]\] (https?:\/\/\S+)/g)) {
-      seen.add(match[1]);
-    }
-  }
-
-  // applications.md — extract URLs from report links and any inline URLs
-  if (existsSync(APPLICATIONS_PATH)) {
-    const text = readFileSync(APPLICATIONS_PATH, 'utf-8');
-    for (const match of text.matchAll(/https?:\/\/[^\s|)]+/g)) {
-      seen.add(match[0]);
-    }
-  }
-
-  return seen;
-}
-
-function loadSeenCompanyRoles() {
-  const seen = new Set();
-  if (existsSync(APPLICATIONS_PATH)) {
-    const text = readFileSync(APPLICATIONS_PATH, 'utf-8');
-    // Parse markdown table rows: | # | Date | Company | Role | ...
-    for (const match of text.matchAll(/\|[^|]+\|[^|]+\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|/g)) {
-      const company = match[1].trim().toLowerCase();
-      const role = match[2].trim().toLowerCase();
-      if (company && role && company !== 'company') {
-        seen.add(`${company}::${role}`);
-      }
-    }
-  }
-  return seen;
-}
-
-// ── Pipeline writer ─────────────────────────────────────────────────
-
-function appendToPipeline(offers) {
-  if (offers.length === 0) return;
-
-  let text = readFileSync(PIPELINE_PATH, 'utf-8');
-
-  // Find "## Pendientes" section and append after it
-  const marker = '## Pendientes';
-  const idx = text.indexOf(marker);
-  if (idx === -1) {
-    // No Pendientes section — append at end before Procesadas
-    const procIdx = text.indexOf('## Procesadas');
-    const insertAt = procIdx === -1 ? text.length : procIdx;
-    const block = `\n${marker}\n\n` + offers.map(o =>
-      `- [ ] ${o.url} | ${o.company} | ${o.title}`
-    ).join('\n') + '\n\n';
-    text = text.slice(0, insertAt) + block + text.slice(insertAt);
-  } else {
-    // Find the end of existing Pendientes content (next ## or end)
-    const afterMarker = idx + marker.length;
-    const nextSection = text.indexOf('\n## ', afterMarker);
-    const insertAt = nextSection === -1 ? text.length : nextSection;
-
-    const block = '\n' + offers.map(o =>
-      `- [ ] ${o.url} | ${o.company} | ${o.title}`
-    ).join('\n') + '\n';
-    text = text.slice(0, insertAt) + block + text.slice(insertAt);
-  }
-
-  writeFileSync(PIPELINE_PATH, text, 'utf-8');
-}
-
-function appendToScanHistory(offers, date, status = 'added') {
-  // Ensure file + header exist. Location appended as 7th column for non-breaking
-  // backward compat — older scan-history.tsv files with 6 columns still parse fine
-  // since loadSeenUrls only reads column 0. `status` is parameterized so callers
-  // can record verify outcomes (`skipped_expired`, etc.) without the legacy
-  // `(expired)` suffix in `source`.
-  if (!existsSync(SCAN_HISTORY_PATH)) {
-    writeFileSync(SCAN_HISTORY_PATH, 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation\n', 'utf-8');
-  }
-
-  const lines = offers.map(o =>
-    `${o.url}\t${date}\t${o.source}\t${o.title}\t${o.company}\t${status}\t${o.location || ''}`
-  ).join('\n') + '\n';
-
-  appendFileSync(SCAN_HISTORY_PATH, lines, 'utf-8');
 }
 
 // ── Parallel fetch with concurrency limit ───────────────────────────
