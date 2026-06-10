@@ -508,7 +508,7 @@ if (fileExists('VERSION')) {
 console.log('\n11. Location filter — always_allow tier');
 
 try {
-  const { buildLocationFilter } = await import(pathToFileURL(join(ROOT, 'scan.mjs')).href);
+  const { buildLocationFilter } = await import(pathToFileURL(join(ROOT, 'pipeline-io.mjs')).href);
 
   const filter = buildLocationFilter({
     always_allow: ['belgium', 'brussels'],
@@ -629,6 +629,29 @@ try {
   // step rather than being silently dropped here.
   if (filter(42) === true) pass('non-string locations are passed through to downstream evaluation, not silently dropped');
   else fail('non-string locations should pass through');
+
+  // Case 16: filterAndDedupOffers — shared filter/dedup brain (scan.mjs + search.mjs).
+  const { filterAndDedupOffers } = await import(pathToFileURL(join(ROOT, 'pipeline-io.mjs')).href);
+  const passAll = () => true;
+  const seenUrls = new Set(['https://x.test/seen']);
+  const seenCompanyRoles = new Set();
+  const fd = filterAndDedupOffers([
+    { title: 'AI Engineer', url: 'https://x.test/1', company: 'Acme', location: 'Remote' },
+    { title: 'Bad Role', url: 'https://x.test/2', company: 'Beta', location: 'Remote' }, // title-filtered
+    { title: 'AI Engineer', url: 'https://x.test/seen', company: 'Gamma', location: 'Remote' }, // url dupe
+    { title: 'AI Engineer', url: 'https://x.test/3', company: 'Acme', location: 'Remote' }, // company+role dupe of #1
+  ], {
+    titleFilter: (t) => !/bad/i.test(t),
+    locationFilter: passAll,
+    seenUrls,
+    seenCompanyRoles,
+  });
+  if (fd.kept.length === 1 && fd.kept[0].url === 'https://x.test/1' &&
+      fd.filteredTitle === 1 && fd.dupes === 2 && seenUrls.has('https://x.test/1')) {
+    pass('filterAndDedupOffers keeps unique passing jobs, counts title/dupes, mutates seen sets');
+  } else {
+    fail(`filterAndDedupOffers wrong: ${JSON.stringify(fd)}`);
+  }
 
 } catch (e) {
   fail(`always_allow tests crashed: ${e.message}`);
@@ -1307,6 +1330,254 @@ try {
   rmSync(ready, { recursive: true, force: true });
 } catch (e) {
   fail(`Cold-start trigger test crashed: ${e.message}`);
+}
+
+// ── 13. JOB SEARCH (Apify) ──────────────────────────────────────
+
+console.log('\n13. Job search — Apify transport');
+
+try {
+  const { mapApifyError, runActorSync } = await import(pathToFileURL(join(ROOT, 'sources/_apify.mjs')).href);
+
+  const e408 = mapApifyError(408, '');
+  if (/too broad|--max|narrow/i.test(e408.message)) {
+    pass('mapApifyError(408) explains broad-search timeout');
+  } else {
+    fail(`mapApifyError(408) wrong message: ${e408.message}`);
+  }
+
+  const e402 = mapApifyError(402, '');
+  if (/payment|credit|plan/i.test(e402.message)) {
+    pass('mapApifyError(402) explains billing');
+  } else {
+    fail(`mapApifyError(402) wrong message: ${e402.message}`);
+  }
+
+  const e401 = mapApifyError(401, '');
+  if (/auth|token/i.test(e401.message)) {
+    pass('mapApifyError(401) explains auth/token');
+  } else {
+    fail(`mapApifyError(401) wrong message: ${e401.message}`);
+  }
+
+  const e403 = mapApifyError(403, '');
+  if (/auth|token/i.test(e403.message)) {
+    pass('mapApifyError(403) explains auth/token');
+  } else {
+    fail(`mapApifyError(403) wrong message: ${e403.message}`);
+  }
+
+  const eDefault = mapApifyError(500, '  some very long body   with whitespace  ');
+  if (/HTTP 500/.test(eDefault.message) && eDefault.message.length <= 230) {
+    pass('mapApifyError(default) includes status and bounded snippet');
+  } else {
+    fail(`mapApifyError(default) wrong: ${eDefault.message}`);
+  }
+
+  // Aborted/timed-out fetch must surface as a friendly, actionable error.
+  const abortingFetch = () => { const e = new Error('aborted'); e.name = 'AbortError'; return Promise.reject(e); };
+  let abortMsg = '';
+  try {
+    await runActorSync('owner~actor', {}, { token: 't', maxItems: 10, maxTotalChargeUsd: 1, fetchImpl: abortingFetch });
+  } catch (err) { abortMsg = err.message; }
+  if (/tim(e|ed) out|too broad|--max/i.test(abortMsg)) {
+    pass('runActorSync maps an aborted/timed-out fetch to a friendly error');
+  } else {
+    fail(`runActorSync abort mapping wrong: ${abortMsg}`);
+  }
+
+  // Generic network failure should not leak a raw stack; should be actionable.
+  const failingFetch = () => Promise.reject(new TypeError('network down'));
+  let netMsg = '';
+  try {
+    await runActorSync('owner~actor', {}, { token: 't', maxItems: 10, maxTotalChargeUsd: 1, fetchImpl: failingFetch });
+  } catch (err) { netMsg = err.message; }
+  if (/apify request failed|network/i.test(netMsg)) {
+    pass('runActorSync maps a network failure to an actionable error');
+  } else {
+    fail(`runActorSync network mapping wrong: ${netMsg}`);
+  }
+
+  const linkedin = (await import(pathToFileURL(join(ROOT, 'sources/linkedin-apify.mjs')).href)).default;
+
+  const liInput = linkedin.buildInput(
+    { keywords: ['AI Engineer', 'LLM'], location: 'Madrid', country: 'es', remote: undefined, postedDays: 7 },
+    { maxItems: 100 },
+  );
+  const liUrl = liInput.urls?.[0] || '';
+  if (liUrl.includes('linkedin.com/jobs/search') &&
+      liUrl.includes('f_TPR=r604800') &&
+      /keywords=AI(\+|%20)Engineer/.test(liUrl) &&
+      liInput.scrapeCompany === false &&
+      liInput.count === 100) {
+    pass('linkedin.buildInput builds a 7-day search URL, scrapeCompany off, count honored');
+  } else {
+    fail(`linkedin.buildInput wrong: ${JSON.stringify(liInput)}`);
+  }
+
+  const liMin = linkedin.buildInput(
+    { keywords: ['AI'], location: '', country: 'us', remote: undefined, postedDays: 7 },
+    { maxItems: 3 },
+  );
+  if (liMin.count === 10) {
+    pass('linkedin.buildInput clamps count up to the actor minimum (10)');
+  } else {
+    fail(`linkedin.buildInput did not clamp count: ${liMin.count}`);
+  }
+
+  const liJobs = linkedin.normalize([
+    { title: 'Senior AI Engineer', jobUrl: 'https://linkedin.com/jobs/view/1', companyName: 'Acme', location: 'Madrid' },
+    { title: '', jobUrl: 'https://linkedin.com/jobs/view/2', companyName: 'NoTitle' },
+    { title: 'ML Eng', companyName: 'NoUrl' },
+  ]);
+  if (liJobs.length === 1 && liJobs[0].url === 'https://linkedin.com/jobs/view/1' &&
+      liJobs[0].company === 'Acme' && liJobs[0].location === 'Madrid') {
+    pass('linkedin.normalize maps fields and drops malformed items');
+  } else {
+    fail(`linkedin.normalize wrong: ${JSON.stringify(liJobs)}`);
+  }
+
+  const liNullSafe = linkedin.normalize([
+    null,
+    undefined,
+    'not-an-object',
+    { title: 'Real Role', jobUrl: 'https://linkedin.com/jobs/view/9', companyName: 'Acme', location: 'Remote' },
+  ]);
+  if (liNullSafe.length === 1 && liNullSafe[0].url === 'https://linkedin.com/jobs/view/9') {
+    pass('linkedin.normalize survives null/undefined/non-object items');
+  } else {
+    fail(`linkedin.normalize null-safety wrong: ${JSON.stringify(liNullSafe)}`);
+  }
+
+  const indeed = (await import(pathToFileURL(join(ROOT, 'sources/indeed-apify.mjs')).href)).default;
+
+  const inInput = indeed.buildInput(
+    { keywords: ['AI Engineer', 'LLM'], location: 'Berlin', country: 'de', remote: 'remote', postedDays: 7 },
+    { maxItems: 100 },
+  );
+  if (inInput.query === 'AI Engineer LLM' &&
+      inInput.location === 'Berlin' &&
+      inInput.country === 'de' &&
+      inInput.fromDays === '7' &&
+      inInput.maxRows === 100 &&
+      inInput.sort === 'date' &&
+      inInput.remote === 'remote') {
+    pass('indeed.buildInput maps criteria → actor fields (fromDays string, remote string, sort date)');
+  } else {
+    fail(`indeed.buildInput wrong: ${JSON.stringify(inInput)}`);
+  }
+
+  // fromDays is an enum {1,3,7,14}; an off-enum 5-day window widens up to "7",
+  // and remote must be ABSENT (not false) when not requested.
+  const inSnap = indeed.buildInput(
+    { keywords: ['Data'], location: '', country: 'us', remote: undefined, postedDays: 5 },
+    { maxItems: 50 },
+  );
+  if (inSnap.fromDays === '7' && !('remote' in inSnap)) {
+    pass('indeed.buildInput snaps off-enum fromDays up and omits remote when not requested');
+  } else {
+    fail(`indeed.buildInput snap/remote wrong: ${JSON.stringify(inSnap)}`);
+  }
+
+  // Real Indeed output: top-level title/jobUrl/companyName + nested location object.
+  const inJobs = indeed.normalize([
+    null,
+    {
+      title: 'AI Engineer',
+      jobUrl: 'https://www.indeed.com/viewjob?jk=1',
+      companyName: 'Globex',
+      location: { city: 'Berlin', formattedAddressShort: 'Berlin, DE', country: 'Germany' },
+    },
+    { title: 'NoUrl', companyName: 'X' },
+    { jobUrl: 'https://www.indeed.com/viewjob?jk=2', companyName: 'NoTitle' },
+  ]);
+  if (inJobs.length === 1 && inJobs[0].title === 'AI Engineer' &&
+      inJobs[0].url === 'https://www.indeed.com/viewjob?jk=1' &&
+      inJobs[0].company === 'Globex' && inJobs[0].location === 'Berlin, DE') {
+    pass('indeed.normalize maps real fields (nested location), survives null, drops malformed');
+  } else {
+    fail(`indeed.normalize wrong: ${JSON.stringify(inJobs)}`);
+  }
+
+  const { deriveCriteria } = await import(pathToFileURL(join(ROOT, 'search.mjs')).href);
+
+  const c = deriveCriteria({
+    target_roles: { primary: ['Senior AI Engineer'], archetypes: [{ name: 'Solutions Architect' }] },
+    location: { city: 'Madrid', country: 'Spain' },
+    compensation: { location_flexibility: 'Remote preferred' },
+  }, {});
+  if (c.keywords.includes('Senior AI Engineer') && c.keywords.includes('Solutions Architect') &&
+      c.location === 'Madrid' && c.country === 'es' && c.remote === 'remote' && c.postedDays === 7) {
+    pass('deriveCriteria maps roles, archetypes, location, country code, remote, default freshness');
+  } else {
+    fail(`deriveCriteria wrong: ${JSON.stringify(c)}`);
+  }
+
+  const cOverride = deriveCriteria({}, { keywords: 'ML Engineer, Data Scientist', postedDays: 1 });
+  if (cOverride.keywords.length === 2 && cOverride.keywords[0] === 'ML Engineer' &&
+      cOverride.country === 'us' && cOverride.postedDays === 1) {
+    pass('deriveCriteria honors --keywords/--posted-days overrides and defaults country to us');
+  } else {
+    fail(`deriveCriteria overrides wrong: ${JSON.stringify(cOverride)}`);
+  }
+
+  const cIso = deriveCriteria({ target_roles: { primary: ['Eng'] }, location: { country: 'de' } }, {});
+  if (cIso.country === 'de') {
+    pass('deriveCriteria passes through an already-ISO2 country code');
+  } else {
+    fail(`deriveCriteria ISO2 passthrough wrong: ${cIso.country}`);
+  }
+
+  let refused = false;
+  try { deriveCriteria({}, {}); } catch { refused = true; }
+  if (refused) {
+    pass('deriveCriteria refuses empty criteria (no roles, no --keywords)');
+  } else {
+    fail('deriveCriteria did not refuse empty criteria');
+  }
+
+  // Dry-run must succeed with NO token and NO network: --keywords bypasses the
+  // profile dependency, --dry-run returns before any Apify call.
+  const dryEnv = { ...process.env };
+  delete dryEnv.APIFY_API_TOKEN;
+  const dryOut = run(NODE, ['search.mjs', '--dry-run', '--keywords', 'AI Engineer', '--max', '25'],
+    { env: dryEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+  if (dryOut !== null && /dry run/i.test(dryOut) && /AI Engineer/.test(dryOut)) {
+    pass('search.mjs --dry-run prints criteria and cost estimate without a token or network');
+  } else {
+    fail(`search.mjs --dry-run failed or missing output: ${String(dryOut).slice(0, 200)}`);
+  }
+
+  const { estimateCostUsd } = await import(pathToFileURL(join(ROOT, 'search.mjs')).href);
+  const est = estimateCostUsd('linkedin', 1000);
+  if (Math.abs(est - 1.0) < 1e-9) {
+    pass('estimateCostUsd(linkedin, 1000) = $1.00');
+  } else {
+    fail(`estimateCostUsd wrong: ${est}`);
+  }
+
+  const estIndeed = estimateCostUsd('indeed', 100);
+  if (Math.abs(estIndeed - 0.5) < 1e-9) {
+    pass('estimateCostUsd(indeed, 100) = $0.50');
+  } else {
+    fail(`estimateCostUsd(indeed,100) wrong: ${estIndeed}`);
+  }
+
+  const { parseArgs } = await import(pathToFileURL(join(ROOT, 'search.mjs')).href);
+  const pa = parseArgs(['node', 'search.mjs', '--keywords', '--max', '25']);
+  if (pa.keywords === undefined && pa.maxItems === 25) {
+    pass('parseArgs does not capture a following --flag as a value (--keywords --max)');
+  } else {
+    fail(`parseArgs flag-value guard wrong: ${JSON.stringify(pa)}`);
+  }
+  const pa2 = parseArgs(['node', 'search.mjs', '--max', '--dry-run']);
+  if (pa2.maxItems === 100 && pa2.dryRun === true) {
+    pass('parseArgs treats `--max --dry-run` as default max + dry-run set');
+  } else {
+    fail(`parseArgs --max/--dry-run wrong: ${JSON.stringify(pa2)}`);
+  }
+} catch (e) {
+  fail(`Apify transport tests crashed: ${e.message}`);
 }
 
 // ── SUMMARY ─────────────────────────────────────────────────────

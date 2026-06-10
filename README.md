@@ -185,6 +185,7 @@ Career-ops is a single slash command with multiple modes:
 /career-ops                → Show all available commands
 /career-ops {paste a JD}   → Full auto-pipeline (evaluate + PDF + tracker)
 /career-ops scan           → Scan portals for new offers
+/career-ops search         → Autonomous LinkedIn + Indeed search (Apify, paid)
 /career-ops pdf            → Generate ATS-optimized CV
 /career-ops batch          → Batch evaluate multiple offers
 /career-ops tracker        → View application status
@@ -242,6 +243,22 @@ node scan.mjs --verify          # zero-token discovery + Playwright liveness che
 ```
 
 The verification is sequential and only runs against new offers (after dedup), so the cost stays bounded.
+
+### Autonomous search (`/career-ops search`)
+
+While `scan` is zero-cost (ATS feeds only), `search` casts a wider net across
+LinkedIn + Indeed via paid [Apify](https://apify.com) actors and feeds matches
+into your pipeline. Pricing: LinkedIn ≈ $1/1k results, Indeed ≈ $5/1k jobs.
+
+1. Add `APIFY_API_TOKEN` to `.env.local` (see `.env.example`).
+2. Preview cost (no spend): `node search.mjs --dry-run`
+3. Run: `node search.mjs` (a.k.a. `npm run search`)
+4. Evaluate: `/career-ops pipeline`
+
+Criteria are auto-derived from `config/profile.yml`. Every live run sends a
+server-side spend cap, and dry-run shows the worst-case cost first. Flags:
+`--dry-run`, `--source linkedin|indeed`, `--max N` (default 100, ceiling 500),
+`--posted-days N` (default 7), `--keywords "A,B"`.
 
 ## Dashboard TUI
 
