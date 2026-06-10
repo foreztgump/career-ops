@@ -1512,6 +1512,47 @@ try {
   } else {
     fail('deriveCriteria did not refuse empty criteria');
   }
+
+  // Dry-run must succeed with NO token and NO network: --keywords bypasses the
+  // profile dependency, --dry-run returns before any Apify call.
+  const dryEnv = { ...process.env };
+  delete dryEnv.APIFY_API_TOKEN;
+  const dryOut = run(NODE, ['search.mjs', '--dry-run', '--keywords', 'AI Engineer', '--max', '25'],
+    { env: dryEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+  if (dryOut !== null && /dry run/i.test(dryOut) && /AI Engineer/.test(dryOut)) {
+    pass('search.mjs --dry-run prints criteria and cost estimate without a token or network');
+  } else {
+    fail(`search.mjs --dry-run failed or missing output: ${String(dryOut).slice(0, 200)}`);
+  }
+
+  const { estimateCostUsd } = await import(pathToFileURL(join(ROOT, 'search.mjs')).href);
+  const est = estimateCostUsd('linkedin', 1000);
+  if (Math.abs(est - 1.0) < 1e-9) {
+    pass('estimateCostUsd(linkedin, 1000) = $1.00');
+  } else {
+    fail(`estimateCostUsd wrong: ${est}`);
+  }
+
+  const estIndeed = estimateCostUsd('indeed', 100);
+  if (Math.abs(estIndeed - 0.5) < 1e-9) {
+    pass('estimateCostUsd(indeed, 100) = $0.50');
+  } else {
+    fail(`estimateCostUsd(indeed,100) wrong: ${estIndeed}`);
+  }
+
+  const { parseArgs } = await import(pathToFileURL(join(ROOT, 'search.mjs')).href);
+  const pa = parseArgs(['node', 'search.mjs', '--keywords', '--max', '25']);
+  if (pa.keywords === undefined && pa.maxItems === 25) {
+    pass('parseArgs does not capture a following --flag as a value (--keywords --max)');
+  } else {
+    fail(`parseArgs flag-value guard wrong: ${JSON.stringify(pa)}`);
+  }
+  const pa2 = parseArgs(['node', 'search.mjs', '--max', '--dry-run']);
+  if (pa2.maxItems === 100 && pa2.dryRun === true) {
+    pass('parseArgs treats `--max --dry-run` as default max + dry-run set');
+  } else {
+    fail(`parseArgs --max/--dry-run wrong: ${JSON.stringify(pa2)}`);
+  }
 } catch (e) {
   fail(`Apify transport tests crashed: ${e.message}`);
 }
