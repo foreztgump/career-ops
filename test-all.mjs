@@ -1425,6 +1425,56 @@ try {
   } else {
     fail(`linkedin.normalize null-safety wrong: ${JSON.stringify(liNullSafe)}`);
   }
+
+  const indeed = (await import(pathToFileURL(join(ROOT, 'sources/indeed-apify.mjs')).href)).default;
+
+  const inInput = indeed.buildInput(
+    { keywords: ['AI Engineer', 'LLM'], location: 'Berlin', country: 'de', remote: 'remote', postedDays: 7 },
+    { maxItems: 100 },
+  );
+  if (inInput.query === 'AI Engineer LLM' &&
+      inInput.location === 'Berlin' &&
+      inInput.country === 'de' &&
+      inInput.fromDays === '7' &&
+      inInput.maxRows === 100 &&
+      inInput.sort === 'date' &&
+      inInput.remote === 'remote') {
+    pass('indeed.buildInput maps criteria → actor fields (fromDays string, remote string, sort date)');
+  } else {
+    fail(`indeed.buildInput wrong: ${JSON.stringify(inInput)}`);
+  }
+
+  // fromDays is an enum {1,3,7,14}; an off-enum 5-day window widens up to "7",
+  // and remote must be ABSENT (not false) when not requested.
+  const inSnap = indeed.buildInput(
+    { keywords: ['Data'], location: '', country: 'us', remote: undefined, postedDays: 5 },
+    { maxItems: 50 },
+  );
+  if (inSnap.fromDays === '7' && !('remote' in inSnap)) {
+    pass('indeed.buildInput snaps off-enum fromDays up and omits remote when not requested');
+  } else {
+    fail(`indeed.buildInput snap/remote wrong: ${JSON.stringify(inSnap)}`);
+  }
+
+  // Real Indeed output: top-level title/jobUrl/companyName + nested location object.
+  const inJobs = indeed.normalize([
+    null,
+    {
+      title: 'AI Engineer',
+      jobUrl: 'https://www.indeed.com/viewjob?jk=1',
+      companyName: 'Globex',
+      location: { city: 'Berlin', formattedAddressShort: 'Berlin, DE', country: 'Germany' },
+    },
+    { title: 'NoUrl', companyName: 'X' },
+    { jobUrl: 'https://www.indeed.com/viewjob?jk=2', companyName: 'NoTitle' },
+  ]);
+  if (inJobs.length === 1 && inJobs[0].title === 'AI Engineer' &&
+      inJobs[0].url === 'https://www.indeed.com/viewjob?jk=1' &&
+      inJobs[0].company === 'Globex' && inJobs[0].location === 'Berlin, DE') {
+    pass('indeed.normalize maps real fields (nested location), survives null, drops malformed');
+  } else {
+    fail(`indeed.normalize wrong: ${JSON.stringify(inJobs)}`);
+  }
 } catch (e) {
   fail(`Apify transport tests crashed: ${e.message}`);
 }
