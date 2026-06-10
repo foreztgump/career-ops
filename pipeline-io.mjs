@@ -94,6 +94,27 @@ export function loadSeenCompanyRoles() {
   return seen;
 }
 
+// ── Filter + dedup ──────────────────────────────────────────────────
+// Filter a batch of jobs by title + location, then dedup against the running
+// seen-sets (mutated in place so successive batches don't re-add). Returns the
+// kept jobs plus per-category removal counts; callers accumulate the totals.
+// Shared by scan.mjs (per-provider batches) and search.mjs (all sources).
+export function filterAndDedupOffers(jobs, { titleFilter, locationFilter, seenUrls, seenCompanyRoles }) {
+  const kept = [];
+  let filteredTitle = 0, filteredLocation = 0, dupes = 0;
+  for (const job of jobs) {
+    if (!titleFilter(job.title)) { filteredTitle++; continue; }
+    if (!locationFilter(job.location)) { filteredLocation++; continue; }
+    if (seenUrls.has(job.url)) { dupes++; continue; }
+    const key = `${job.company.toLowerCase()}::${job.title.toLowerCase()}`;
+    if (seenCompanyRoles.has(key)) { dupes++; continue; }
+    seenUrls.add(job.url);
+    seenCompanyRoles.add(key);
+    kept.push(job);
+  }
+  return { kept, filteredTitle, filteredLocation, dupes };
+}
+
 // ── Writers ─────────────────────────────────────────────────────────
 export function appendToPipeline(offers) {
   if (offers.length === 0) return;

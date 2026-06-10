@@ -43,6 +43,7 @@ import {
   buildLocationFilter,
   loadSeenUrls,
   loadSeenCompanyRoles,
+  filterAndDedupOffers,
   appendToPipeline,
   appendToScanHistory,
 } from './pipeline-io.mjs';
@@ -348,29 +349,13 @@ async function main() {
       }
       totalFound += jobs.length;
 
-      for (const job of jobs) {
-        if (!titleFilter(job.title)) {
-          totalFilteredTitle++;
-          continue;
-        }
-        if (!locationFilter(job.location)) {
-          totalFilteredLocation++;
-          continue;
-        }
-        if (seenUrls.has(job.url)) {
-          totalDupes++;
-          continue;
-        }
-        const key = `${job.company.toLowerCase()}::${job.title.toLowerCase()}`;
-        if (seenCompanyRoles.has(key)) {
-          totalDupes++;
-          continue;
-        }
-        // Mark as seen to avoid intra-scan dupes
-        seenUrls.add(job.url);
-        seenCompanyRoles.add(key);
-        newOffers.push({ ...job, source: sourceName });
-      }
+      const { kept, filteredTitle, filteredLocation, dupes } = filterAndDedupOffers(jobs, {
+        titleFilter, locationFilter, seenUrls, seenCompanyRoles,
+      });
+      totalFilteredTitle += filteredTitle;
+      totalFilteredLocation += filteredLocation;
+      totalDupes += dupes;
+      for (const job of kept) newOffers.push({ ...job, source: sourceName });
     } catch (err) {
       errors.push({ company: company.name, error: err.message });
     }

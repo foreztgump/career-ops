@@ -630,6 +630,29 @@ try {
   if (filter(42) === true) pass('non-string locations are passed through to downstream evaluation, not silently dropped');
   else fail('non-string locations should pass through');
 
+  // Case 16: filterAndDedupOffers — shared filter/dedup brain (scan.mjs + search.mjs).
+  const { filterAndDedupOffers } = await import(pathToFileURL(join(ROOT, 'pipeline-io.mjs')).href);
+  const passAll = () => true;
+  const seenUrls = new Set(['https://x.test/seen']);
+  const seenCompanyRoles = new Set();
+  const fd = filterAndDedupOffers([
+    { title: 'AI Engineer', url: 'https://x.test/1', company: 'Acme', location: 'Remote' },
+    { title: 'Bad Role', url: 'https://x.test/2', company: 'Beta', location: 'Remote' }, // title-filtered
+    { title: 'AI Engineer', url: 'https://x.test/seen', company: 'Gamma', location: 'Remote' }, // url dupe
+    { title: 'AI Engineer', url: 'https://x.test/3', company: 'Acme', location: 'Remote' }, // company+role dupe of #1
+  ], {
+    titleFilter: (t) => !/bad/i.test(t),
+    locationFilter: passAll,
+    seenUrls,
+    seenCompanyRoles,
+  });
+  if (fd.kept.length === 1 && fd.kept[0].url === 'https://x.test/1' &&
+      fd.filteredTitle === 1 && fd.dupes === 2 && seenUrls.has('https://x.test/1')) {
+    pass('filterAndDedupOffers keeps unique passing jobs, counts title/dupes, mutates seen sets');
+  } else {
+    fail(`filterAndDedupOffers wrong: ${JSON.stringify(fd)}`);
+  }
+
 } catch (e) {
   fail(`always_allow tests crashed: ${e.message}`);
 }

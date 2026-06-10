@@ -16,6 +16,7 @@ import {
   buildLocationFilter,
   loadSeenUrls,
   loadSeenCompanyRoles,
+  filterAndDedupOffers,
   appendToPipeline,
   appendToScanHistory,
   PIPELINE_PATH,
@@ -219,22 +220,6 @@ async function fetchSources(opts, criteria, token) {
   return { rawJobs, errors, totalFound };
 }
 
-function filterAndDedup(rawJobs, { titleFilter, locationFilter, seenUrls, seenCompanyRoles }) {
-  let filteredTitle = 0, filteredLocation = 0, dupes = 0;
-  const newOffers = [];
-  for (const job of rawJobs) {
-    if (!titleFilter(job.title)) { filteredTitle++; continue; }
-    if (!locationFilter(job.location)) { filteredLocation++; continue; }
-    if (seenUrls.has(job.url)) { dupes++; continue; }
-    const key = `${job.company.toLowerCase()}::${job.title.toLowerCase()}`;
-    if (seenCompanyRoles.has(key)) { dupes++; continue; }
-    seenUrls.add(job.url);
-    seenCompanyRoles.add(key);
-    newOffers.push(job);
-  }
-  return { newOffers, filteredTitle, filteredLocation, dupes };
-}
-
 function printSummary({ opts, totalFound, filteredTitle, filteredLocation, dupes, newOffers, errors }) {
   console.log(`\n${'━'.repeat(45)}`);
   console.log(`Sources searched:      ${opts.sourceIds.length} (${opts.sourceIds.join(', ')})`);
@@ -269,8 +254,8 @@ async function runLiveSearch(opts, criteria, date) {
   const seenCompanyRoles = loadSeenCompanyRoles();
 
   const { rawJobs, errors, totalFound } = await fetchSources(opts, criteria, token);
-  const { newOffers, filteredTitle, filteredLocation, dupes } =
-    filterAndDedup(rawJobs, { titleFilter, locationFilter, seenUrls, seenCompanyRoles });
+  const { kept: newOffers, filteredTitle, filteredLocation, dupes } =
+    filterAndDedupOffers(rawJobs, { titleFilter, locationFilter, seenUrls, seenCompanyRoles });
 
   if (newOffers.length > 0) {
     appendToPipeline(newOffers);
