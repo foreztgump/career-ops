@@ -4,8 +4,8 @@
 // Feed-only: derives criteria from config/profile.yml, runs source adapters,
 // filters/dedupes via pipeline-io, and appends matches to data/pipeline.md.
 //
-// Orchestrator (main) is added in Task 6; this file first defines the pure
-// criteria layer so it is unit-testable in isolation.
+// Layered so the pure criteria functions (deriveCriteria/loadProfile) stay
+// unit-testable in isolation, with the CLI orchestrator (main) below them.
 
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';

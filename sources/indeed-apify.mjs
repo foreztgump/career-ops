@@ -48,8 +48,8 @@ export default {
     return input;
   },
 
-  // Output keys verified against the actor README sample (2026-06):
-  // title / jobUrl / companyName / location{...}. Fallbacks kept defensive.
+  // Output keys verified against a live run (2026-06): title / jobUrl /
+  // companyName / location{...} (nested object). Fallbacks kept defensive.
   normalize(items) {
     if (!Array.isArray(items)) return [];
     return items
