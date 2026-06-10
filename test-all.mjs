@@ -1309,6 +1309,75 @@ try {
   fail(`Cold-start trigger test crashed: ${e.message}`);
 }
 
+// ── 13. JOB SEARCH (Apify) ──────────────────────────────────────
+
+console.log('\n13. Job search — Apify transport');
+
+try {
+  const { mapApifyError, runActorSync } = await import(pathToFileURL(join(ROOT, 'sources/_apify.mjs')).href);
+
+  const e408 = mapApifyError(408, '');
+  if (/too broad|--max|narrow/i.test(e408.message)) {
+    pass('mapApifyError(408) explains broad-search timeout');
+  } else {
+    fail(`mapApifyError(408) wrong message: ${e408.message}`);
+  }
+
+  const e402 = mapApifyError(402, '');
+  if (/payment|credit|plan/i.test(e402.message)) {
+    pass('mapApifyError(402) explains billing');
+  } else {
+    fail(`mapApifyError(402) wrong message: ${e402.message}`);
+  }
+
+  const e401 = mapApifyError(401, '');
+  if (/auth|token/i.test(e401.message)) {
+    pass('mapApifyError(401) explains auth/token');
+  } else {
+    fail(`mapApifyError(401) wrong message: ${e401.message}`);
+  }
+
+  const e403 = mapApifyError(403, '');
+  if (/auth|token/i.test(e403.message)) {
+    pass('mapApifyError(403) explains auth/token');
+  } else {
+    fail(`mapApifyError(403) wrong message: ${e403.message}`);
+  }
+
+  const eDefault = mapApifyError(500, '  some very long body   with whitespace  ');
+  if (/HTTP 500/.test(eDefault.message) && eDefault.message.length <= 230) {
+    pass('mapApifyError(default) includes status and bounded snippet');
+  } else {
+    fail(`mapApifyError(default) wrong: ${eDefault.message}`);
+  }
+
+  // Aborted/timed-out fetch must surface as a friendly, actionable error.
+  const abortingFetch = () => { const e = new Error('aborted'); e.name = 'AbortError'; return Promise.reject(e); };
+  let abortMsg = '';
+  try {
+    await runActorSync('owner~actor', {}, { token: 't', maxItems: 10, maxTotalChargeUsd: 1, fetchImpl: abortingFetch });
+  } catch (err) { abortMsg = err.message; }
+  if (/tim(e|ed) out|too broad|--max/i.test(abortMsg)) {
+    pass('runActorSync maps an aborted/timed-out fetch to a friendly error');
+  } else {
+    fail(`runActorSync abort mapping wrong: ${abortMsg}`);
+  }
+
+  // Generic network failure should not leak a raw stack; should be actionable.
+  const failingFetch = () => Promise.reject(new TypeError('network down'));
+  let netMsg = '';
+  try {
+    await runActorSync('owner~actor', {}, { token: 't', maxItems: 10, maxTotalChargeUsd: 1, fetchImpl: failingFetch });
+  } catch (err) { netMsg = err.message; }
+  if (/apify request failed|network/i.test(netMsg)) {
+    pass('runActorSync maps a network failure to an actionable error');
+  } else {
+    fail(`runActorSync network mapping wrong: ${netMsg}`);
+  }
+} catch (e) {
+  fail(`Apify transport tests crashed: ${e.message}`);
+}
+
 // ── SUMMARY ─────────────────────────────────────────────────────
 
 console.log('\n' + '='.repeat(50));
